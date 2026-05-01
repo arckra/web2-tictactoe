@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tic Tac Toe — WebSocket</title>
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            mono: ['"Space Mono"', 'monospace'],
+            display: ['Syne', 'sans-serif'],
+          },
+          colors: {
+            bg:        '#0a0a0f',
+            surface:   '#13131a',
+            border:    '#2a2a3a',
+            'accent-x':'#ff4d6d',
+            'accent-o':'#4dc9ff',
+            muted:     '#6b6b80',
+          },
+        },
+      },
+    }
+  </script>
+
+  <!-- Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@700;800&display=swap" rel="stylesheet" />
+
+  <style>
+    body { background-color: #0a0a0f; }
+
+    /* Grid background effect */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(#2a2a3a 1px, transparent 1px),
+        linear-gradient(90deg, #2a2a3a 1px, transparent 1px);
+      background-size: 40px 40px;
+      opacity: 0.3;
+      pointer-events: none;
+    }
+
+    /* Hover cell — hanya saat bisa klik */
+    .cell:hover:not(.taken):not(.disabled) {
+      background: #1a1a25;
+      border-color: #ff4d6d;
+      transform: scale(1.04);
+    }
+
+    /* Toast slide up */
+    #toast {
+      transform: translateX(-50%) translateY(100px);
+      transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+
+    /* Animasi pop-in & win-pulse */
+    @keyframes pulse-win {
+      from { box-shadow: 0 0 0 0 rgba(255,215,0,0.2); }
+      to   { box-shadow: 0 0 16px 4px rgba(255,215,0,0.35); }
+    }
+    @keyframes pop-in {
+      from { transform: scale(0.5); opacity: 0; }
+      to   { transform: scale(1); opacity: 1; }
+    }
+  </style>
+</head>
+
+<body class="min-h-screen flex flex-col items-center justify-center px-6 py-8 font-mono text-[#e8e8f0] overflow-x-hidden">
+
+  <div class="relative z-10 w-full max-w-[480px]">
+
+    <!-- ── HEADER ── -->
+    <header class="text-center mb-8">
+      <h1 class="font-display text-4xl font-extrabold tracking-tight leading-none">
+        <span class="text-[#ff4d6d]">TIC</span> TAC <span class="text-[#4dc9ff]">TOE</span>
+      </h1>
+      <p class="text-[#6b6b80] text-xs mt-1.5 tracking-[3px] uppercase">WebSocket Multiplayer</p>
+    </header>
+
+    <!-- ── CONNECTION STATUS ── -->
+    <div class="flex items-center justify-center gap-2 text-xs text-[#6b6b80] mb-6">
+      <div id="status-dot" class="w-2 h-2 rounded-full bg-[#ff4d6d]"></div>
+      <span id="status-text">Menghubungkan ke server...</span>
+    </div>
+
+    <!-- ── LOBBY ── -->
+    <div id="lobby" class="bg-[#13131a] border border-[#2a2a3a] rounded-2xl p-6 mb-4">
+      <h2 class="font-display text-sm text-[#6b6b80] uppercase tracking-[3px] mb-4">Masuk ke Game</h2>
+      <div class="flex flex-col gap-3">
+
+        <!-- Buat Room -->
+        <button id="btn-create"
+          class="font-mono font-bold text-sm tracking-widest uppercase
+                 bg-[#ff4d6d] text-white rounded-xl px-5 py-3.5
+                 transition-transform active:scale-95
+                 disabled:opacity-40 disabled:cursor-not-allowed">
+          🏠 Buat Room Baru
+        </button>
+
+        <!-- Join Room -->
+        <div>
+          <p class="text-xs text-[#6b6b80] uppercase tracking-[2px] mb-2">atau gabung dengan kode:</p>
+          <div class="flex gap-2">
+            <input id="room-input" type="text" maxlength="6" placeholder="Kode room..."
+              class="flex-1 bg-[#0a0a0f] border border-[#2a2a3a] rounded-xl
+                     text-[#e8e8f0] font-mono font-bold text-base px-4 py-3
+                     uppercase tracking-[3px] outline-none
+                     placeholder:text-[#6b6b80] placeholder:normal-case placeholder:tracking-normal
+                     focus:border-[#4dc9ff] transition-colors" />
+            <button id="btn-join"
+              class="font-mono font-bold text-sm tracking-widest uppercase
+                     border-2 border-[#4dc9ff] text-[#4dc9ff] bg-transparent rounded-xl px-5 py-3
+                     transition-transform active:scale-95
+                     disabled:opacity-40 disabled:cursor-not-allowed">
+              Join
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── GAME AREA ── -->
+    <div id="game-area" class="hidden">
+
+      <!-- Room Code -->
+      <div class="text-center px-4 py-2.5 bg-[#0a0a0f] border border-dashed border-[#2a2a3a] rounded-lg mb-4 text-xs text-[#6b6b80]">
+        Room:
+        <span id="display-room-id" class="text-lg text-[#e8e8f0] tracking-[4px] font-bold">------</span>
+        <span class="text-[0.65rem] text-[#6b6b80] ml-2">(bagikan ke temanmu)</span>
+      </div>
+
+      <!-- Player Info Bar -->
+      <div class="flex justify-between items-center mb-4 text-sm">
+        <!-- Kamu -->
+        <div class="flex items-center gap-2 px-3.5 py-2 rounded-lg border border-[#ff4d6d]">
+          <span id="my-sym"  class="font-display font-extrabold text-xl text-[#ff4d6d]">?</span>
+          <span class="text-xs">Kamu</span>
+        </div>
+
+        <!-- Turn Indicator -->
+        <div id="turn-indicator" class="text-center text-xs text-[#6b6b80] uppercase tracking-[2px]">
+          Menunggu...
+        </div>
+
+        <!-- Lawan -->
+        <div class="flex items-center gap-2 px-3.5 py-2 rounded-lg border border-[#4dc9ff]">
+          <span id="opp-sym" class="font-display font-extrabold text-xl text-[#4dc9ff]">?</span>
+          <span class="text-xs">Lawan</span>
+        </div>
+      </div>
+
+      <!-- ── BOARD ── -->
+      <div id="board" class="grid grid-cols-3 gap-2.5 my-5">
+        <!-- 9 cell dirender JS -->
+      </div>
+
+      <!-- Status Message -->
+      <div id="status-msg"
+        class="text-center text-sm px-4 py-3 rounded-xl min-h-[44px]
+               flex items-center justify-center transition-all
+               bg-[#1a1a25] text-[#6b6b80]">
+        Menunggu pemain kedua...
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="flex gap-2 mt-3">
+        <button id="btn-restart" disabled
+          class="flex-1 font-mono font-bold text-xs tracking-widest uppercase
+                 border border-[#2a2a3a] text-[#6b6b80] bg-transparent rounded-xl px-4 py-3
+                 transition-transform active:scale-95
+                 disabled:opacity-40 disabled:cursor-not-allowed">
+          🔄 Restart
+        </button>
+        <button id="btn-leave"
+          class="flex-1 font-mono font-bold text-xs tracking-widest uppercase
+                 border border-[#2a2a3a] text-[#6b6b80] bg-transparent rounded-xl px-4 py-3
+                 transition-transform active:scale-95">
+          🚪 Keluar
+        </button>
+      </div>
+    </div>
+
+    <!-- ── WS LOG ── -->
+    <details class="mt-2">
+      <summary class="cursor-pointer text-xs text-[#6b6b80] uppercase tracking-[2px] py-2 select-none">
+        📡 WebSocket Log
+      </summary>
+      <div id="ws-log"
+        class="bg-[#0a0a0f] border border-[#2a2a3a] rounded-xl p-3 mt-2
+               max-h-40 overflow-y-auto text-[0.7rem] text-[#6b6b80] leading-relaxed">
+      </div>
+    </details>
+
+  </div><!-- /container -->
+
+  <!-- ── TOAST ── -->
+  <div id="toast"
+    class="fixed bottom-6 left-1/2
+           bg-[#13131a] border border-[#2a2a3a] rounded-xl px-5 py-3
+           text-sm text-[#e8e8f0] z-50 whitespace-nowrap">
+  </div>
+
+
+  <script>
+    // ══════════════════════════════════════════════
+    //  CONFIG
+    // ══════════════════════════════════════════════
+    const WS_URL = "ws://localhost:8080";
+
+    // ══════════════════════════════════════════════
+    //  STATE
+    // ══════════════════════════════════════════════
+    let ws          = null;
+    let mySymbol    = null;
+    let currentTurn = null;
+    let board       = Array(9).fill(null);
+    let gameOver    = false;
+    let inGame      = false;
+
+    // ══════════════════════════════════════════════
+    //  DOM REFS
+    // ══════════════════════════════════════════════
+    const $lobby      = document.getElementById("lobby");
+    const $gameArea   = document.getElementById("game-area");
+    const $board      = document.getElementById("board");
+    const $statusMsg  = document.getElementById("status-msg");
+    const $turnInd    = document.getElementById("turn-indicator");
+    const $mySym      = document.getElementById("my-sym");
+    const $oppSym     = document.getElementById("opp-sym");
+    const $roomDisp   = document.getElementById("display-room-id");
+    const $statusDot  = document.getElementById("status-dot");
+    const $statusText = document.getElementById("status-text");
+    const $wsLog      = document.getElementById("ws-log");
+    const $toast      = document.getElementById("toast");
+    const $btnRestart = document.getElementById("btn-restart");
+    const $btnCreate  = document.getElementById("btn-create");
+    const $btnJoin    = document.getElementById("btn-join");
+    const $btnLeave   = document.getElementById("btn-leave");
+    const $roomInput  = document.getElementById("room-input");
+
+    // ══════════════════════════════════════════════
+    //  WEBSOCKET SETUP
+    // ══════════════════════════════════════════════
+    function connectWS() {
+      ws = new WebSocket(WS_URL);
+
+      ws.onopen = () => {
+        addLog("Terhubung ke server WebSocket!", "sys");
+        $statusDot.className = "w-2 h-2 rounded-full bg-[#4dff91]";
+        $statusDot.style.boxShadow = "0 0 8px #4dff91";
+        $statusText.textContent = "Terhubung ke server";
+        enableLobby(true);
+      };
+
+      ws.onclose = () => {
+        addLog("Koneksi terputus dari server.", "sys");
+        $statusDot.className = "w-2 h-2 rounded-full bg-[#ff4d6d]";
+        $statusDot.style.boxShadow = "";
+        $statusText.textContent = "Terputus — refresh untuk coba lagi";
+        enableLobby(false);
+      };
+
+      ws.onerror = () => addLog("Error koneksi WebSocket.", "sys");
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        addLog(JSON.stringify(msg), "recv");
+        handleMessage(msg);
+      };
+    }
+
+    // ══════════════════════════════════════════════
+    //  KIRIM PESAN
+    // ══════════════════════════════════════════════
+    function send(type, payload = {}) {
+      const msg = JSON.stringify({ type, payload });
+      ws.send(msg);
+      addLog(msg, "send");
+    }
+
+    // ══════════════════════════════════════════════
+    //  HANDLE PESAN DARI SERVER
+    // ══════════════════════════════════════════════
+    function handleMessage(msg) {
+      const { type, board: newBoard, currentTurn: turn, result, message, roomId, symbol } = msg;
+
+      switch (type) {
+        case "room_created":
+          mySymbol = symbol;
+          enterGameUI(roomId, symbol);
+          setStatus("Menunggu lawan bergabung...", "info");
+          showToast(`Room ${roomId} dibuat!`);
+          break;
+
+        case "room_joined":
+          mySymbol = symbol;
+          enterGameUI(roomId, symbol);
+          setStatus("Menunggu game dimulai...", "info");
+          break;
+
+        case "opponent_joined":
+          setStatus(message, "success");
+          showToast("Lawan masuk!");
+          break;
+
+        case "game_start":
+          inGame = true;
+          updateBoard(newBoard);
+          updateTurn(turn);
+          setStatus(turn === mySymbol ? "Giliran kamu! Pilih kotak." : "Giliran lawan...", "info");
+          break;
+
+        case "board_update":
+          updateBoard(newBoard);
+          updateTurn(turn);
+          setStatus(turn === mySymbol ? "Giliran kamu!" : "Giliran lawan...", "info");
+          if (msg.lastMove !== undefined) animateCell(msg.lastMove.index);
+          break;
+
+        case "game_over":
+          gameOver = true;
+          updateBoard(newBoard);
+          if (result.winner === "draw") {
+            setStatus("🤝 Seri! Tidak ada yang menang.", "info");
+            showToast("Seri!");
+          } else if (result.winner === mySymbol) {
+            setStatus("🏆 Kamu menang! Selamat!", "win");
+            showToast("Kamu menang! 🏆");
+          } else {
+            setStatus("😢 Kamu kalah. Coba lagi!", "error");
+            showToast("Kamu kalah...");
+          }
+          highlightWin(result.line);
+          $btnRestart.disabled = false;
+          break;
+
+        case "game_restart":
+          gameOver = false;
+          updateBoard(newBoard);
+          updateTurn(turn);
+          $btnRestart.disabled = true;
+          setStatus("Game dimulai ulang! Giliran " + (turn === mySymbol ? "kamu" : "lawan"), "info");
+          break;
+
+        case "opponent_left":
+          setStatus("Lawan keluar dari game.", "error");
+          showToast("Lawan meninggalkan game!");
+          inGame = false;
+          gameOver = true;
+          break;
+
+        case "error":
+          setStatus(message, "error");
+          showToast("⚠️ " + message);
+          break;
+      }
+    }
+
+    // ══════════════════════════════════════════════
+    //  RENDER BOARD
+    // ══════════════════════════════════════════════
+    function renderBoard() {
+      $board.innerHTML = "";
+      board.forEach((val, i) => {
+        const cell = document.createElement("div");
+
+        cell.className = [
+          "cell aspect-square",
+          "bg-[#0a0a0f] border border-[#2a2a3a] rounded-xl",
+          "flex items-center justify-center",
+          "font-display text-[2.2rem] font-extrabold",
+          "transition-all duration-150 select-none",
+        ].join(" ");
+
+        cell.dataset.index = i;
+
+        if (val) {
+          cell.textContent = val;
+          cell.classList.add("taken", "cursor-default");
+          cell.style.color = val === "X" ? "#ff4d6d" : "#4dc9ff";
+        } else if (!inGame || gameOver || currentTurn !== mySymbol) {
+          cell.classList.add("disabled", "cursor-not-allowed");
+        } else {
+          cell.classList.add("cursor-pointer");
+        }
+
+        cell.addEventListener("click", onCellClick);
+        $board.appendChild(cell);
+      });
+    }
+
+    function updateBoard(newBoard) {
+      board = newBoard;
+      renderBoard();
+    }
+
+    function updateTurn(turn) {
+      currentTurn = turn;
+      const isMyTurn = turn === mySymbol;
+      $turnInd.textContent = isMyTurn ? "⬅ Giliran Kamu" : "Giliran Lawan...";
+      $turnInd.style.color = isMyTurn ? "#ff4d6d" : "#6b6b80";
+      renderBoard();
+    }
+
+    function animateCell(index) {
+      const cell = $board.children[index];
+      if (!cell) return;
+      cell.style.animation = "none";
+      void cell.offsetWidth; // reflow
+      cell.style.animation = "pop-in 0.2s cubic-bezier(0.34,1.56,0.64,1)";
+    }
+
+    function highlightWin(line) {
+      if (!line || !line.length) return;
+      line.forEach(i => {
+        const cell = $board.children[i];
+        if (!cell) return;
+        cell.style.background   = "rgba(255,215,0,0.08)";
+        cell.style.borderColor  = "#ffd700";
+        cell.style.animation    = "pulse-win 0.8s ease infinite alternate";
+      });
+    }
+
+    // ══════════════════════════════════════════════
+    //  EVENT HANDLERS
+    // ══════════════════════════════════════════════
+    function onCellClick(e) {
+      if (!inGame || gameOver) return;
+      if (currentTurn !== mySymbol) return;
+      const index = parseInt(e.currentTarget.dataset.index);
+      if (board[index]) return;
+      send("make_move", { index });
+    }
+
+    $btnCreate.addEventListener("click", () => send("create_room"));
+
+    $btnJoin.addEventListener("click", () => {
+      const roomId = $roomInput.value.trim().toUpperCase();
+      if (!roomId) return showToast("⚠️ Masukkan kode room dulu!");
+      send("join_room", { roomId });
+    });
+
+    $roomInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") $btnJoin.click();
+    });
+
+    $btnRestart.addEventListener("click", () => send("restart"));
+
+    $btnLeave.addEventListener("click", () => {
+      ws.close();
+      location.reload();
+    });
+
+    // ══════════════════════════════════════════════
+    //  UI HELPERS
+    // ══════════════════════════════════════════════
+    function enterGameUI(roomId, symbol) {
+      $lobby.classList.add("hidden");
+      $gameArea.classList.remove("hidden");
+      $roomDisp.textContent = roomId;
+      $mySym.textContent  = symbol;
+      $oppSym.textContent = symbol === "X" ? "O" : "X";
+      renderBoard();
+    }
+
+    // Status variants pakai inline style supaya lebih fleksibel
+    const statusStyle = {
+      info:    { bg: "#1a1a25",                  color: "#6b6b80",  bold: false },
+      success: { bg: "rgba(77,255,145,0.1)",     color: "#4dff91",  bold: false },
+      error:   { bg: "rgba(255,77,109,0.1)",     color: "#ff4d6d",  bold: false },
+      win:     { bg: "rgba(255,215,0,0.1)",      color: "#ffd700",  bold: true  },
+    };
+
+    function setStatus(text, type = "info") {
+      $statusMsg.textContent = text;
+      const s = statusStyle[type] || statusStyle.info;
+      $statusMsg.style.background = s.bg;
+      $statusMsg.style.color      = s.color;
+      $statusMsg.style.fontWeight = s.bold ? "700" : "400";
+      $statusMsg.style.fontSize   = s.bold ? "1rem" : "0.875rem";
+    }
+
+    function enableLobby(enabled) {
+      $btnCreate.disabled = !enabled;
+      $btnJoin.disabled   = !enabled;
+    }
+
+    let toastTimer = null;
+    function showToast(text) {
+      $toast.textContent = text;
+      $toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => $toast.classList.remove("show"), 2800);
+    }
+
+    function addLog(text, type = "recv") {
+      const line = document.createElement("div");
+      const colorMap = { send: "#ff4d6d", recv: "#4dc9ff", sys: "#4dff91" };
+      line.style.color = colorMap[type] || "#6b6b80";
+      const time   = new Date().toLocaleTimeString("id-ID", { hour12: false });
+      const prefix = type === "send" ? "▶ SEND" : type === "sys" ? "● SYS" : "◀ RECV";
+      line.textContent = `[${time}] ${prefix}: ${text}`;
+      $wsLog.appendChild(line);
+      $wsLog.scrollTop = $wsLog.scrollHeight;
+    }
+
+    // ══════════════════════════════════════════════
+    //  INIT
+    // ══════════════════════════════════════════════
+    connectWS();
+  </script>
+</body>
+</html>
